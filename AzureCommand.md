@@ -126,20 +126,25 @@ az network route-table create \
   --resource-group $RESOURCE_GROUP \
   --name $ROUTE_TABLE_NAME
 
-# 4.4. 作成したサブネットにNSGとルートテーブルを適用
+# 4.4. 作成したサブネットにNSGとルートテーブルを適用（ID で関連付け）
+NSG_ID=$(az network nsg show --resource-group $RESOURCE_GROUP --name $NSG_NAME --query id -o tsv)
+RT_ID=$(az network route-table show --resource-group $RESOURCE_GROUP --name $ROUTE_TABLE_NAME --query id -o tsv)
 az network vnet subnet update \
   --resource-group $VNET_RESOURCE_GROUP \
   --vnet-name $VNET_NAME \
   --name $SUBNET_NAME \
-  --network-security-group $NSG_NAME \
-  --route-table $ROUTE_TABLE_NAME
+  --network-security-group $NSG_ID \
+  --route-table $RT_ID
+
+# サブネットのリソースID（VM 作成で利用）
+SUBNET_ID=$(az network vnet subnet show --resource-group $VNET_RESOURCE_GROUP --vnet-name $VNET_NAME --name $SUBNET_NAME --query id -o tsv)
 
 # 【確認】サブネットの詳細を表示し、NSGとルートテーブルが関連付けられていることを確認
 az network vnet subnet show \
   --resource-group $VNET_RESOURCE_GROUP \
   --vnet-name $VNET_NAME \
   --name $SUBNET_NAME \
-  --query '{name:name, addressPrefix:addressPrefix, nsg:networkSecurityGroup.id, routeTable:routeTable.id}'
+  --query '{name:name, addressPrefixes:addressPrefixes, nsg:networkSecurityGroup.id, routeTable:routeTable.id}'
 ```
 
 ## 5. NSGルールの設定例
@@ -154,8 +159,9 @@ az network nsg rule create \
   --name AllowSshFromMyIp \
   --priority 1000 \
   --protocol Tcp \
-  --destination-port-range 22 \
+  --destination-port-ranges 22 \
   --access Allow \
+  --direction Inbound \
   --source-address-prefixes 'YOUR_GLOBAL_IP_ADDRESS'
 
 # 例2: 特定のIPからRDP(ポート3389)を許可するルール (Windows VM用)
@@ -165,8 +171,9 @@ az network nsg rule create \
   --name AllowRdpFromMyIp \
   --priority 1010 \
   --protocol Tcp \
-  --destination-port-range 3389 \
+  --destination-port-ranges 3389 \
   --access Allow \
+  --direction Inbound \
   --source-address-prefixes 'YOUR_GLOBAL_IP_ADDRESS'
 
 # 【確認】設定されたNSGルールの一覧を表示
@@ -185,12 +192,12 @@ az vm create \
   --name $VM_NAME \
   --image $IMAGE_URN_LINUX \
   --size $VM_SIZE \
-  --vnet-name $VNET_NAME \
-  --subnet $SUBNET_NAME \
+  --subnet $SUBNET_ID \
   --admin-username $ADMIN_USER \
   --admin-password $ADMIN_PASSWORD \
   --public-ip-address "" \
-  --nsg ""
+  --nsg "" \
+  --storage-sku StandardSSD_LRS
 ```
 
 ### 6.2. Windows VMの作成
@@ -201,12 +208,12 @@ az vm create \
   --name $VM_NAME \
   --image $IMAGE_URN_WINDOWS \
   --size $VM_SIZE \
-  --vnet-name $VNET_NAME \
-  --subnet $SUBNET_NAME \
+  --subnet $SUBNET_ID \
   --admin-username $ADMIN_USER \
   --admin-password $ADMIN_PASSWORD \
   --public-ip-address "" \
-  --nsg ""
+  --nsg "" \
+  --storage-sku StandardSSD_LRS
 ```
 
 ```bash
@@ -226,7 +233,7 @@ VMにデータディスクと共有ディスクをアタッチします。（こ
 ### 7.1. データディスクのアタッチ
 
 ```bash
-# 128GBのStandard SSDをLUN 0に、キャッシュをReadWriteでアタッチ
+# 128GBのStandard SSDをLUN 0に、キャッシュは None（推奨）でアタッチ
 az vm disk attach \
   --resource-group $RESOURCE_GROUP \
   --vm-name $VM_NAME \
@@ -234,7 +241,7 @@ az vm disk attach \
   --size-gb 128 \
   --sku StandardSSD_LRS \
   --lun 0 \
-  --caching ReadWrite \
+  --caching None \
   --new
 ```
 
@@ -276,12 +283,14 @@ Log Analytics, DCE, DCRを作成し、VMのログを収集します。（この�
 # 8.1. Log Analyticsワークスペースの作成
 az monitor log-analytics workspace create \
   --resource-group $RESOURCE_GROUP \
-  --workspace-name $LOG_ANALYTICS_WORKSPACE_NAME
+  --workspace-name $LOG_ANALYTICS_WORKSPACE_NAME \
+  --location $LOCATION
 
 # 8.2. データ収集エンドポイント (DCE) の作成
 az monitor data-collection endpoint create \
   --resource-group $RESOURCE_GROUP \
-  --name $DCE_NAME
+  --name $DCE_NAME \
+  --location $LOCATION
 
 # 8.3. データ収集ルール (DCR) の作成 (Linux Syslogの例)
 DCR_FILE="dcr.json"
